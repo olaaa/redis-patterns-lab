@@ -11,3 +11,9 @@ rate-limit:
   limit: 10
   window: 1s
   algorithm: FIXED_WINDOW
+
+# Сценарий 3: выгрузка каталога партнёру под распределённой блокировкой.
+catalog-export:
+  lease: 10s
+  work-duration: 5s
+  renew-every: 3s

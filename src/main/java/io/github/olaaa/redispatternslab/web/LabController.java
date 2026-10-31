@@ -1,6 +1,12 @@
 package io.github.olaaa.redispatternslab.web;
 
+import java.util.List;
+
+import io.github.olaaa.redispatternslab.lock.CatalogExportJob;
+import io.github.olaaa.redispatternslab.lock.PartnerInbox;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -11,15 +17,41 @@ import reactor.core.publisher.Mono;
 @RequestMapping("/lab")
 public class LabController {
 
-    private final ReactiveStringRedisTemplate redis;
-
-    public LabController(ReactiveStringRedisTemplate redis) {
-        this.redis = redis;
+    public record ExportRun(String replica, boolean exported) {
     }
 
-    /* Очищает текущую базу Redis целиком: все счётчики и ключи лаборатории живут в ней. */
+    public record InboxState(List<String> exportedBy, int maxConcurrentExports) {
+    }
+
+    private final ReactiveStringRedisTemplate redis;
+    private final CatalogExportJob catalogExportJob;
+    private final PartnerInbox partnerInbox;
+    private final String replica;
+
+    public LabController(ReactiveStringRedisTemplate redis, CatalogExportJob catalogExportJob,
+                         PartnerInbox partnerInbox, @Value("${server.port:8080}") String serverPort) {
+        this.redis = redis;
+        this.catalogExportJob = catalogExportJob;
+        this.partnerInbox = partnerInbox;
+        this.replica = "replica-" + serverPort;
+    }
+
+    /* Сценарий 3: выгрузить каталог партнёру, если блокировку взяла эта реплика. */
+    @PostMapping("/catalog-export")
+    public Mono<ExportRun> catalogExport() {
+        return catalogExportJob.runOnce(replica).map(exported -> new ExportRun(replica, exported));
+    }
+
+    /* Сценарий 3: что получил партнёр на этой реплике. */
+    @GetMapping("/partner-inbox")
+    public InboxState partnerInbox() {
+        return new InboxState(partnerInbox.exportedBy(), partnerInbox.maxConcurrentExports());
+    }
+
+    /* Очищает текущую базу Redis целиком и приёмник выгрузок. */
     @PostMapping("/reset")
     public Mono<Void> reset() {
+        partnerInbox.reset();
         return redis.execute(connection -> connection.serverCommands().flushDb()).then();
     }
 }

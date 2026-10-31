@@ -1,0 +1,19 @@
+### Сценарий 3. Распределённая блокировка с арендой. Подробно: docs/scenarios/03-lease-lock.md
+### Нужны две реплики: mvn spring-boot:run и во втором терминале
+### mvn spring-boot:run -Dspring-boot.run.arguments=--server.port=8081
+### Выгрузка длится 5 секунд: шаг 3 запустить, пока идёт шаг 2.
+
+### 1. Сброс: Redis общий, приёмник выгрузок — у каждой реплики свой
+POST http://localhost:8080/lab/reset
+
+###
+POST http://localhost:8081/lab/reset
+
+### 2. Выгрузка на 8080: {"exported":true} — блокировку взяла она
+POST http://localhost:8080/lab/catalog-export
+
+### 3. Пока идёт шаг 2 — выгрузка на 8081: {"exported":false}, блокировку держит 8080
+POST http://localhost:8081/lab/catalog-export
+
+### 4. Что получил партнёр на 8080: одна выгрузка
+GET http://localhost:8080/lab/partner-inbox

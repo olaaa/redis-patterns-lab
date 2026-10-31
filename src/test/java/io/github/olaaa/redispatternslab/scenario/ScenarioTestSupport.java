@@ -5,6 +5,7 @@ import java.time.Instant;
 import io.github.olaaa.redispatternslab.MutableClock;
 import io.github.olaaa.redispatternslab.MutableClockConfiguration;
 import io.github.olaaa.redispatternslab.TestcontainersConfiguration;
+import io.github.olaaa.redispatternslab.lock.PartnerInbox;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -13,7 +14,7 @@ import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 
 /*
  * Общая основа сценариев: один контекст Spring, один контейнер PostgreSQL и один Redis на все тесты.
- * Перед каждым тестом — чистая база Redis и часы ровно на начале секунды.
+ * Перед каждым тестом — чистая база Redis, часы ровно на начале секунды и пустой приёмник выгрузок.
  */
 @SpringBootTest
 @Import({TestcontainersConfiguration.class, MutableClockConfiguration.class})
@@ -29,9 +30,13 @@ abstract class ScenarioTestSupport {
     @Autowired
     MutableClock clock;
 
+    @Autowired
+    PartnerInbox partnerInbox;
+
     @BeforeEach
     void resetLab() {
         redis.execute(connection -> connection.serverCommands().flushDb()).blockLast();
         clock.set(WINDOW_START);
+        partnerInbox.reset();
     }
 }
