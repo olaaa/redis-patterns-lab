@@ -55,4 +55,9 @@ public class RedisFixedWindowRateLimiter implements RateLimiter {
                     .map(count -> RateLimitDecision.of(count, properties.limit(), window.untilEnd()));
         });
     }
+
+    @Override
+    public RateLimitAlgorithm algorithm() {
+        return RateLimitAlgorithm.FIXED_WINDOW;
+    }
 }

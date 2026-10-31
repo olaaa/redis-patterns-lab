@@ -39,4 +39,9 @@ public class LocalFixedWindowRateLimiter implements RateLimiter {
             return RateLimitDecision.of(counter.count().incrementAndGet(), properties.limit(), window.untilEnd());
         });
     }
+
+    @Override
+    public RateLimitAlgorithm algorithm() {
+        return RateLimitAlgorithm.FIXED_WINDOW;
+    }
 }

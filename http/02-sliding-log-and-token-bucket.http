@@ -1,0 +1,13 @@
+### Сценарий 2. Скользящее окно и ведро токенов. Подробно: docs/scenarios/02-sliding-log-and-token-bucket.md
+### Алгоритм задаётся при запуске:
+### mvn spring-boot:run -Dspring-boot.run.arguments=--rate-limit.algorithm=TOKEN_BUCKET
+### mvn spring-boot:run -Dspring-boot.run.arguments=--rate-limit.algorithm=SLIDING_LOG
+### Лимит — 10 запросов в секунду. 12 запросов подряд удобнее из терминала — команды в описании сценария.
+
+### 1. Сброс: очистить Redis
+POST http://localhost:8080/lab/reset
+
+### 2. Запрос клиента mobile-app. Повторять быстро: после 10 — 429 и Retry-After.
+### TOKEN_BUCKET: через 100 мс снова проходит один запрос. SLIDING_LOG: только через секунду после первого из десяти.
+GET http://localhost:8080/products/1
+X-Client-Id: mobile-app

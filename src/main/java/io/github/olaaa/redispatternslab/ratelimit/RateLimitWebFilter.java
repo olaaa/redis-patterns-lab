@@ -1,6 +1,7 @@
 package io.github.olaaa.redispatternslab.ratelimit;
 
 import java.net.InetSocketAddress;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.http.HttpStatus;
@@ -13,7 +14,7 @@ import reactor.core.publisher.Mono;
 /*
  * Ограничение частоты запросов к каталогу. Клиент — заголовок X-Client-Id, без него — адрес клиента.
  * Пропущенный запрос получает X-RateLimit-Remaining, отклонённый — 429 Too Many Requests
- * и Retry-After: через сколько секунд начнётся следующее окно.
+ * и Retry-After: через сколько секунд повторить. Алгоритм — rate-limit.algorithm.
  */
 @Component
 public class RateLimitWebFilter implements WebFilter {
@@ -22,10 +23,14 @@ public class RateLimitWebFilter implements WebFilter {
     public static final String REMAINING_HEADER = "X-RateLimit-Remaining";
     private static final String LIMITED_PATH = "/products/";
 
-    private final RedisFixedWindowRateLimiter rateLimiter;
+    private final RateLimiter rateLimiter;
 
-    public RateLimitWebFilter(RedisFixedWindowRateLimiter rateLimiter) {
-        this.rateLimiter = rateLimiter;
+    /* Из ограничителей-бинов берётся тот, чей алгоритм задан в rate-limit.algorithm. */
+    public RateLimitWebFilter(List<RateLimiter> rateLimiters, RateLimitProperties properties) {
+        this.rateLimiter = rateLimiters.stream()
+                .filter(candidate -> candidate.algorithm() == properties.algorithm())
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("нет ограничителя " + properties.algorithm()));
     }
 
     @Override

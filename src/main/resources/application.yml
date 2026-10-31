@@ -5,7 +5,9 @@ spring:
     init:
       mode: always
 
-# Сценарий 1: не больше 10 запросов к каталогу от одного клиента в секунду.
+# Не больше 10 запросов к каталогу от одного клиента в секунду.
+# algorithm: FIXED_WINDOW (сценарий 1), SLIDING_LOG или TOKEN_BUCKET (сценарий 2).
 rate-limit:
   limit: 10
   window: 1s
+  algorithm: FIXED_WINDOW
