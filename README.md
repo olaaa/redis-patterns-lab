@@ -27,6 +27,7 @@ Spring Boot сам поднимет PostgreSQL и Redis из `compose.yaml`. З�
 
 - `catalog` — таблица `product` и `ProductRepository` на `DatabaseClient`.
 - `ratelimit` — ограничение частоты запросов.
+- `lock` — распределённая блокировка и выгрузка каталога партнёру под ней.
 - `web` — `GET /products/{id}` и служебные ручки `/lab`.
 - `config/ClockConfiguration` — часы приложения; в тестах их подменяет `MutableClock`.
 
@@ -47,3 +48,9 @@ Spring Boot сам поднимет PostgreSQL и Redis из `compose.yaml`. З�
 Тест: `Scenario2SlidingLogAndTokenBucketTest`. Компоненты: `RedisSlidingLogRateLimiter`, `RedisTokenBucketRateLimiter`; в фильтре — по `rate-limit.algorithm`. Подробно: [docs/scenarios/02-sliding-log-and-token-bucket.md](docs/scenarios/02-sliding-log-and-token-bucket.md), вручную: `http/02-sliding-log-and-token-bucket.http`.
 
 Скользящее окно хранит в ZSET время каждого пропущенного запроса и в любую секунду пропускает не больше 10 — но держит до 10 записей на клиента. Ведро токенов хранит два числа на клиента, пересчитывает пополнение при каждом запросе и разрешает пачку до ёмкости ведра. Опыт у границы окон, 100 мс: фиксированное окно — 20 запросов, скользящее — 10, ведро — 11.
+
+### 3. Распределённая блокировка с арендой
+
+Тест: `Scenario3LeaseLockTest`. Компоненты: `RedisLock`, `CatalogExportJob`, `PartnerInbox`. Подробно: [docs/scenarios/03-lease-lock.md](docs/scenarios/03-lease-lock.md), вручную: `http/03-lease-lock.http` на двух репликах.
+
+Выгрузку каталога партнёру запускает каждая реплика, выполняет одна. Блокировка — `SET lock:catalog-export <маркер> NX PX <срок>`; снять и продлить можно только свою — скриптом со сравнением маркера (в Redis 8.4+ ещё `DELEX ... IFEQ`); снимается при любом исходе выгрузки. Простой `DEL` после истечения аренды удаляет чужую блокировку. Аренда освобождает блокировку упавшего держателя, но может истечь и у живого: без продления долгая выгрузка теряет блокировку, и выгружают двое одновременно — это задача маркера ограждения.
