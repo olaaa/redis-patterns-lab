@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: redis-patterns-lab
+  sql:
+    init:
+      mode: always
+
+# Сценарий 1: не больше 10 запросов к каталогу от одного клиента в секунду.
+rate-limit:
+  limit: 10
+  window: 1s
