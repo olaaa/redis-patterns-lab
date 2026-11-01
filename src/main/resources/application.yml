@@ -17,3 +17,11 @@ catalog-export:
   lease: 10s
   work-duration: 5s
   renew-every: 3s
+
+# Сценарий 4: создание заказа и идемпотентность запросов.
+orders:
+  # «Проверка и резерв» перед записью заказа: так повтор успевает прийти, пока первый запрос в работе.
+  processing-delay: 2s
+idempotency:
+  in-progress-ttl: 30s
+  completed-ttl: 24h

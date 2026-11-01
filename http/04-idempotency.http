@@ -1,0 +1,53 @@
+### Сценарий 4. Идемпотентность запросов. Подробно: docs/scenarios/04-idempotency.md
+### Обработка заказа длится 2 секунды: шаг 4 запустить, пока идёт шаг 3.
+
+### 1. Сброс: Redis и заказы
+POST http://localhost:8080/lab/reset
+
+### 2. Заказ без ключа. Повторить — будет второй заказ
+POST http://localhost:8080/orders
+X-Client-Id: mobile-app
+Content-Type: application/json
+
+{"productId": 1, "quantity": 2}
+
+### 3. Заказ с ключом: 201
+POST http://localhost:8080/orders
+X-Client-Id: mobile-app
+Idempotency-Key: order-1
+Content-Type: application/json
+
+{"productId": 1, "quantity": 2}
+
+### 4. Повтор, пока идёт шаг 3: 409. Повтор после шага 3: 201 и Idempotent-Replayed: true, тот же заказ
+POST http://localhost:8080/orders
+X-Client-Id: mobile-app
+Idempotency-Key: order-1
+Content-Type: application/json
+
+{"productId": 1, "quantity": 2}
+
+### 5. Тот же ключ, другое тело: 422
+POST http://localhost:8080/orders
+X-Client-Id: mobile-app
+Idempotency-Key: order-1
+Content-Type: application/json
+
+{"productId": 1, "quantity": 5}
+
+### 6. Сколько заказов у клиента
+GET http://localhost:8080/lab/orders?client=mobile-app
+
+### 7. Сбой между базой и Redis: включить, заказ с ключом order-2 (500), выключить, повторить (201, тот же заказ)
+POST http://localhost:8080/lab/orders/fail-after-save?enabled=true
+
+###
+POST http://localhost:8080/orders
+X-Client-Id: mobile-app
+Idempotency-Key: order-2
+Content-Type: application/json
+
+{"productId": 1, "quantity": 2}
+
+###
+POST http://localhost:8080/lab/orders/fail-after-save?enabled=false
