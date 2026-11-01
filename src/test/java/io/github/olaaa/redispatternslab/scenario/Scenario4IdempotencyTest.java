@@ -4,169 +4,202 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import io.github.olaaa.redispatternslab.idempotency.IdempotentOutcome;
 import io.github.olaaa.redispatternslab.idempotency.IdempotentRequests;
-import io.github.olaaa.redispatternslab.order.OrderRequest;
-import io.github.olaaa.redispatternslab.web.OrderController;
+import io.github.olaaa.redispatternslab.payment.PaymentRequest;
+import io.github.olaaa.redispatternslab.payment.PaymentService;
+import io.github.olaaa.redispatternslab.web.PaymentController;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import reactor.core.publisher.Mono;
+import tools.jackson.databind.json.JsonMapper;
 
-/* Сценарий 4. Идемпотентность запросов: повтор создания заказа с тем же ключом не создаёт второй заказ. */
+/* Сценарий 4. Идемпотентность запросов: повтор оплаты с тем же ключом не списывает деньги второй раз. */
 class Scenario4IdempotencyTest extends ScenarioTestSupport {
 
     private static final String CLIENT = "mobile-app";
-    private static final String KEY = "6f1c2a9e-order-1";
+    private static final String KEY = "6f1c2a9e-pay-1";
     private static final String RECORD_KEY = IdempotentRequests.KEY_PREFIX + CLIENT + ":" + KEY;
-    private static final OrderRequest KETTLE_ORDER = new OrderRequest(1, 2);
+    private static final PaymentRequest PAYMENT = new PaymentRequest("order-42", new BigDecimal("4980.00"));
 
     @Autowired
-    OrderController orders;
+    PaymentController payments;
+
+    @Autowired
+    PaymentService paymentService;
+
+    @Autowired
+    IdempotentRequests idempotentRequests;
+
+    @Autowired
+    JsonMapper jsonMapper;
 
     @Autowired
     ApplicationContext applicationContext;
 
     @Test
-    void retryWithoutKeyCreatesSecondOrder() {
-        ResponseEntity<String> first = orders.create(CLIENT, null, KETTLE_ORDER).block();
-        ResponseEntity<String> retry = orders.create(CLIENT, null, KETTLE_ORDER).block();
+    void retryWithoutIdempotencyChargesTwice() {
+        /* Без слоя идемпотентности: ответ не дошёл, клиент повторил — второй вызов сервиса оплаты. */
+        paymentService.pay(CLIENT, null, PAYMENT).block();
+        paymentService.pay(CLIENT, null, PAYMENT).block();
 
-        assertThat(first.getStatusCode().value()).isEqualTo(201);
-        assertThat(retry.getStatusCode().value()).isEqualTo(201);
-        assertThat(retry.getBody()).as("повтор создал другой заказ").isNotEqualTo(first.getBody());
-        assertThat(orderCount()).as("клиент не дождался ответа, повторил — и получил два заказа").isEqualTo(2);
+        assertThat(paymentProvider.charges()).as("деньги списаны дважды").hasSize(2);
     }
 
     @Test
-    void retryWithSameKeyGetsSavedResponseAndCreatesOneOrder() {
+    void paymentWithoutKeyIsRejected() {
+        ResponseEntity<String> response = payments.pay(CLIENT, null, PAYMENT).block();
+
+        assertThat(response.getStatusCode().value()).as("без ключа оплата не принимается").isEqualTo(400);
+        assertThat(paymentProvider.callCount()).isZero();
+    }
+
+    @Test
+    void retryWithSameKeyGetsSavedResponseAndChargesOnce() {
         WebTestClient client = WebTestClient.bindToApplicationContext(applicationContext).build();
 
-        String first = client.post().uri("/orders")
-                .header(OrderController.CLIENT_ID_HEADER, CLIENT)
-                .header(OrderController.IDEMPOTENCY_KEY_HEADER, KEY)
+        String first = client.post().uri("/payments")
+                .header(PaymentController.CLIENT_ID_HEADER, CLIENT)
+                .header(PaymentController.IDEMPOTENCY_KEY_HEADER, KEY)
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(KETTLE_ORDER)
+                .bodyValue(PAYMENT)
                 .exchange()
                 .expectStatus().isCreated()
-                .expectHeader().doesNotExist(OrderController.REPLAYED_HEADER)
+                .expectHeader().doesNotExist(PaymentController.REPLAYED_HEADER)
                 .expectBody(String.class).returnResult().getResponseBody();
 
-        client.post().uri("/orders")
-                .header(OrderController.CLIENT_ID_HEADER, CLIENT)
-                .header(OrderController.IDEMPOTENCY_KEY_HEADER, KEY)
+        client.post().uri("/payments")
+                .header(PaymentController.CLIENT_ID_HEADER, CLIENT)
+                .header(PaymentController.IDEMPOTENCY_KEY_HEADER, KEY)
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(KETTLE_ORDER)
+                .bodyValue(PAYMENT)
                 .exchange()
                 .expectStatus().isCreated()
-                .expectHeader().valueEquals(OrderController.REPLAYED_HEADER, "true")
+                .expectHeader().valueEquals(PaymentController.REPLAYED_HEADER, "true")
                 .expectBody(String.class).isEqualTo(first);
 
-        assertThat(orderCount()).isEqualTo(1);
+        assertThat(paymentProvider.callCount()).as("повтор до провайдера не дошёл").isEqualTo(1);
+        assertThat(paymentProvider.charges()).hasSize(1);
     }
 
     @Test
     void retryWhileFirstIsInProgressGetsConflict() {
-        CompletableFuture<ResponseEntity<String>> first = orders.create(CLIENT, KEY, KETTLE_ORDER).toFuture();
+        CompletableFuture<ResponseEntity<String>> first = payments.pay(CLIENT, KEY, PAYMENT).toFuture();
         await().atMost(Duration.ofSeconds(5)).until(() -> "IN_PROGRESS".equals(recordField("state")));
 
-        ResponseEntity<String> concurrent = orders.create(CLIENT, KEY, KETTLE_ORDER).block();
+        ResponseEntity<String> concurrent = payments.pay(CLIENT, KEY, PAYMENT).block();
         assertThat(concurrent.getStatusCode().value())
-                .as("первый запрос ещё в работе — повтор получает 409, а не второй заказ")
+                .as("первый запрос ещё у провайдера — повтор получает 409 и провайдера не вызывает")
                 .isEqualTo(409);
 
         ResponseEntity<String> firstResponse = awaitResult(first);
-        ResponseEntity<String> later = orders.create(CLIENT, KEY, KETTLE_ORDER).block();
-        assertThat(later.getStatusCode().value()).isEqualTo(201);
+        ResponseEntity<String> later = payments.pay(CLIENT, KEY, PAYMENT).block();
         assertThat(later.getBody()).isEqualTo(firstResponse.getBody());
-        assertThat(later.getHeaders().getFirst(OrderController.REPLAYED_HEADER)).isEqualTo("true");
-        assertThat(orderCount()).isEqualTo(1);
+        assertThat(later.getHeaders().getFirst(PaymentController.REPLAYED_HEADER)).isEqualTo("true");
+        assertThat(paymentProvider.callCount()).isEqualTo(1);
     }
 
     @Test
     void sameKeyWithDifferentRequestIsRejected() {
-        orders.create(CLIENT, KEY, KETTLE_ORDER).block();
+        payments.pay(CLIENT, KEY, PAYMENT).block();
 
-        ResponseEntity<String> otherRequest = orders.create(CLIENT, KEY, new OrderRequest(1, 5)).block();
+        ResponseEntity<String> otherAmount = payments.pay(CLIENT, KEY,
+                new PaymentRequest("order-42", new BigDecimal("9960.00"))).block();
 
-        assertThat(otherRequest.getStatusCode().value())
-                .as("тот же ключ, другое тело — ошибка клиента, а не повтор")
+        assertThat(otherAmount.getStatusCode().value())
+                .as("тот же ключ, другая сумма — ошибка клиента, а не повтор")
                 .isEqualTo(422);
-        assertThat(orderCount()).isEqualTo(1);
+        assertThat(paymentProvider.charges()).hasSize(1);
     }
 
     @Test
-    void failureAfterSavingReleasesKeyAndDatabaseKeepsOneOrder() {
-        orderFaults.setFailAfterSave(true);
+    void declinedPaymentIsSavedAndReplayed() {
+        PaymentRequest overLimit = new PaymentRequest("order-43", new BigDecimal("250000.00"));
 
-        assertThatThrownBy(() -> orders.create(CLIENT, KEY, KETTLE_ORDER).block())
-                .hasMessageContaining("реплика упала");
-        assertThat(redis.hasKey(RECORD_KEY).block())
-                .as("обработка упала — запись о ключе удалена, повтор выполнится заново")
-                .isFalse();
-        assertThat(orderCount()).as("но заказ в базе уже записан").isEqualTo(1);
+        ResponseEntity<String> first = payments.pay(CLIENT, KEY, overLimit).block();
+        ResponseEntity<String> retry = payments.pay(CLIENT, KEY, overLimit).block();
 
-        orderFaults.setFailAfterSave(false);
-        ResponseEntity<String> retry = orders.create(CLIENT, KEY, KETTLE_ORDER).block();
+        assertThat(first.getStatusCode().value()).isEqualTo(402);
+        assertThat(retry.getStatusCode().value()).isEqualTo(402);
+        assertThat(retry.getHeaders().getFirst(PaymentController.REPLAYED_HEADER))
+                .as("отказ провайдера — тоже результат обработки: сохранён и повторён без нового вызова")
+                .isEqualTo("true");
+        assertThat(paymentProvider.callCount()).isEqualTo(1);
+    }
 
-        assertThat(retry.getStatusCode().value()).isEqualTo(201);
-        assertThat(retry.getBody())
-                .as("повтор получил тот заказ, что записал первый запрос")
-                .contains("\"id\":" + orderRepository.findByIdempotencyKey(CLIENT, KEY).block().id());
-        assertThat(orderCount()).as("уникальный ключ в базе не пустил второй заказ").isEqualTo(1);
-        assertThat(orderService.foundByIdempotencyKey()).isEqualTo(1);
+    @Test
+    void crashAfterChargeWithoutKeyForProviderChargesTwice() {
+        PaymentService withoutProviderKey = new PaymentService(paymentProvider, paymentFaults, false);
+        paymentFaults.setFailAfterCharge(true);
+
+        assertThatThrownBy(() -> payViaIdempotency(withoutProviderKey).block()).hasMessageContaining("реплика упала");
+        assertThat(redis.hasKey(RECORD_KEY).block()).as("сбой — запись о ключе удалена").isFalse();
+
+        paymentFaults.setFailAfterCharge(false);
+        IdempotentOutcome retry = payViaIdempotency(withoutProviderKey).block();
+
+        assertThat(retry.response().status()).isEqualTo(201);
+        assertThat(paymentProvider.charges())
+                .as("Redis о первом списании не знал, провайдер ключа не получил — деньги списаны второй раз")
+                .hasSize(2);
+    }
+
+    @Test
+    void crashAfterChargeWithKeyForProviderChargesOnce() {
+        paymentFaults.setFailAfterCharge(true);
+
+        assertThatThrownBy(() -> payViaIdempotency(paymentService).block()).hasMessageContaining("реплика упала");
+
+        paymentFaults.setFailAfterCharge(false);
+        IdempotentOutcome retry = payViaIdempotency(paymentService).block();
+
+        assertThat(retry.response().status()).isEqualTo(201);
+        assertThat(retry.response().body()).contains("\"chargeId\":\"ch_1\"");
+        assertThat(paymentProvider.charges())
+                .as("провайдер узнал свой ключ и вернул прежнее списание вместо нового")
+                .hasSize(1);
+        assertThat(paymentProvider.callCount()).isEqualTo(2);
     }
 
     @Test
     void keyHeldByCrashedReplicaFreesAfterInProgressTtl() {
-        /* Реплика взяла ключ и упала до записи в базу: запись «в работе» осталась, снять её некому. */
+        /* Реплика взяла ключ и упала до вызова провайдера: запись «в работе» осталась, снять её некому. */
         redis.opsForHash().putAll(RECORD_KEY, Map.of(
                 "state", "IN_PROGRESS",
                 "token", "упавшая реплика",
-                "fingerprint", OrderController.fingerprint(KETTLE_ORDER))).block();
+                "fingerprint", PaymentController.fingerprint(PAYMENT))).block();
         redis.expire(RECORD_KEY, Duration.ofMillis(500)).block();
 
-        assertThat(orders.create(CLIENT, KEY, KETTLE_ORDER).block().getStatusCode().value()).isEqualTo(409);
+        assertThat(payments.pay(CLIENT, KEY, PAYMENT).block().getStatusCode().value()).isEqualTo(409);
         await().atMost(Duration.ofSeconds(5))
-                .until(() -> orders.create(CLIENT, KEY, KETTLE_ORDER).block().getStatusCode().value() == 201);
+                .until(() -> payments.pay(CLIENT, KEY, PAYMENT).block().getStatusCode().value() == 201);
 
-        assertThat(orderCount()).as("после истечения записи «в работе» заказ создан один раз").isEqualTo(1);
+        assertThat(paymentProvider.charges()).hasSize(1);
     }
 
     @Test
-    void sameKeyFromDifferentClientsCreatesTwoOrders() {
-        orders.create(CLIENT, KEY, KETTLE_ORDER).block();
-        orders.create("partner", KEY, KETTLE_ORDER).block();
+    void sameKeyFromDifferentClientsChargesTwice() {
+        payments.pay(CLIENT, KEY, PAYMENT).block();
+        payments.pay("partner", KEY, PAYMENT).block();
 
-        assertThat(orderCount()).isEqualTo(1);
-        assertThat(orderRepository.countByClient("partner").block())
-                .as("ключ уникален в пределах клиента: у другого клиента он не мешает")
-                .isEqualTo(1);
-    }
-
-    @Test
-    void notFoundResponseIsSavedAndReplayedToo() {
-        OrderRequest missingProduct = new OrderRequest(999, 1);
-
-        ResponseEntity<String> first = orders.create(CLIENT, KEY, missingProduct).block();
-        ResponseEntity<String> retry = orders.create(CLIENT, KEY, missingProduct).block();
-
-        assertThat(first.getStatusCode().value()).isEqualTo(404);
-        assertThat(retry.getStatusCode().value()).isEqualTo(404);
-        assertThat(retry.getHeaders().getFirst(OrderController.REPLAYED_HEADER))
-                .as("обработка началась и дала ответ — он сохранён, как и успешный")
-                .isEqualTo("true");
+        assertThat(paymentProvider.charges())
+                .as("ключ уникален в пределах клиента: у другого клиента это другой платёж")
+                .hasSize(2);
     }
 
     @Test
     void completedRecordKeepsResponseForDay() {
-        orders.create(CLIENT, KEY, KETTLE_ORDER).block();
+        payments.pay(CLIENT, KEY, PAYMENT).block();
 
         assertThat(recordField("state")).isEqualTo("COMPLETED");
         assertThat(recordField("status")).isEqualTo("201");
@@ -175,8 +208,10 @@ class Scenario4IdempotencyTest extends ScenarioTestSupport {
                 .isLessThanOrEqualTo(Duration.ofHours(24));
     }
 
-    private long orderCount() {
-        return orderRepository.countByClient(CLIENT).block();
+    /* Тот же путь, что у контроллера, но с выбранным сервисом оплаты. */
+    private Mono<IdempotentOutcome> payViaIdempotency(PaymentService service) {
+        return idempotentRequests.execute(CLIENT, KEY, PaymentController.fingerprint(PAYMENT),
+                () -> PaymentController.pay(service, CLIENT, KEY, PAYMENT, jsonMapper));
     }
 
     private String recordField(String field) {

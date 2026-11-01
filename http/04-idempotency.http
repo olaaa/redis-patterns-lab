@@ -1,53 +1,65 @@
-### Сценарий 4. Идемпотентность запросов. Подробно: docs/scenarios/04-idempotency.md
-### Обработка заказа длится 2 секунды: шаг 4 запустить, пока идёт шаг 3.
+### Сценарий 4. Идемпотентность запросов: оплата через внешнего провайдера. Подробно: docs/scenarios/04-idempotency.md
+### Запуск: mvn spring-boot:run. Провайдер отвечает 2 секунды.
 
-### 1. Сброс: Redis и заказы
+### 1. Сброс: Redis, списания провайдера, сбой
 POST http://localhost:8080/lab/reset
 
-### 2. Заказ без ключа. Повторить — будет второй заказ
-POST http://localhost:8080/orders
-X-Client-Id: mobile-app
+### 2. Без ключа: 400, «нужен заголовок Idempotency-Key»
+POST http://localhost:8080/payments
 Content-Type: application/json
-
-{"productId": 1, "quantity": 2}
-
-### 3. Заказ с ключом: 201
-POST http://localhost:8080/orders
 X-Client-Id: mobile-app
-Idempotency-Key: order-1
+
+{"orderId":"order-42","amount":4980.00}
+
+### 3. С ключом pay-1: 201, списание ch_1
+### Если отправить шаг 4, пока идёт этот запрос, — 409
+POST http://localhost:8080/payments
 Content-Type: application/json
-
-{"productId": 1, "quantity": 2}
-
-### 4. Повтор, пока идёт шаг 3: 409. Повтор после шага 3: 201 и Idempotent-Replayed: true, тот же заказ
-POST http://localhost:8080/orders
 X-Client-Id: mobile-app
-Idempotency-Key: order-1
+Idempotency-Key: pay-1
+
+{"orderId":"order-42","amount":4980.00}
+
+### 4. Повтор с тем же ключом: тот же ответ, Idempotent-Replayed: true
+POST http://localhost:8080/payments
 Content-Type: application/json
-
-{"productId": 1, "quantity": 2}
-
-### 5. Тот же ключ, другое тело: 422
-POST http://localhost:8080/orders
 X-Client-Id: mobile-app
-Idempotency-Key: order-1
+Idempotency-Key: pay-1
+
+{"orderId":"order-42","amount":4980.00}
+
+### 5. Тот же ключ, другая сумма: 422
+POST http://localhost:8080/payments
 Content-Type: application/json
-
-{"productId": 1, "quantity": 5}
-
-### 6. Сколько заказов у клиента
-GET http://localhost:8080/lab/orders?client=mobile-app
-
-### 7. Сбой между базой и Redis: включить, заказ с ключом order-2 (500), выключить, повторить (201, тот же заказ)
-POST http://localhost:8080/lab/orders/fail-after-save?enabled=true
-
-###
-POST http://localhost:8080/orders
 X-Client-Id: mobile-app
-Idempotency-Key: order-2
+Idempotency-Key: pay-1
+
+{"orderId":"order-42","amount":9960.00}
+
+### 6. Провайдер: вызван один раз, списание одно
+GET http://localhost:8080/lab/payments/provider
+
+### 7. Сбой после списания: реплика падает, не сохранив ответ
+POST http://localhost:8080/lab/payments/fail-after-charge?enabled=true
+
+### 8. Оплата pay-2: 500 — деньги списаны, ответ не сохранён
+POST http://localhost:8080/payments
 Content-Type: application/json
+X-Client-Id: mobile-app
+Idempotency-Key: pay-2
 
-{"productId": 1, "quantity": 2}
+{"orderId":"order-43","amount":1200.00}
 
-###
-POST http://localhost:8080/lab/orders/fail-after-save?enabled=false
+### 9. Сбой выключить
+POST http://localhost:8080/lab/payments/fail-after-charge?enabled=false
+
+### 10. Повтор pay-2: 201, провайдер узнал ключ и вернул прежнее списание
+POST http://localhost:8080/payments
+Content-Type: application/json
+X-Client-Id: mobile-app
+Idempotency-Key: pay-2
+
+{"orderId":"order-43","amount":1200.00}
+
+### 11. Провайдер: вызван три раза, списаний два — по одному на каждую оплату
+GET http://localhost:8080/lab/payments/provider

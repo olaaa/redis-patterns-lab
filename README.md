@@ -28,8 +28,8 @@ Spring Boot сам поднимет PostgreSQL и Redis из `compose.yaml`. З�
 - `catalog` — таблица `product` и `ProductRepository` на `DatabaseClient`.
 - `ratelimit` — ограничение частоты запросов.
 - `lock` — распределённая блокировка и выгрузка каталога партнёру под ней.
-- `idempotency` — ключи идемпотентности в Redis; `order` — заказы, таблица `customer_order`.
-- `web` — `GET /products/{id}`, `POST /orders` и служебные ручки `/lab`.
+- `idempotency` — ключи идемпотентности в Redis; `payment` — оплата через внешнего платёжного провайдера, `PaymentProvider` его имитирует.
+- `web` — `GET /products/{id}`, `POST /payments` и служебные ручки `/lab`.
 - `config/ClockConfiguration` — часы приложения; в тестах их подменяет `MutableClock`.
 
 Клиент Redis — Lettuce, его приносит `spring-boot-starter-data-redis-reactive`.
@@ -58,6 +58,6 @@ Spring Boot сам поднимет PostgreSQL и Redis из `compose.yaml`. З�
 
 ### 4. Идемпотентность запросов
 
-Тест: `Scenario4IdempotencyTest`. Компоненты: `IdempotentRequests`, `OrderController`, `OrderService`, `OrderRepository`. Подробно: [docs/scenarios/04-idempotency.md](docs/scenarios/04-idempotency.md), вручную: `http/04-idempotency.http`.
+Тест: `Scenario4IdempotencyTest`. Компоненты: `IdempotentRequests`, `PaymentController`, `PaymentService`, `PaymentProvider`. Подробно: [docs/scenarios/04-idempotency.md](docs/scenarios/04-idempotency.md), вручную: `http/04-idempotency.http`.
 
-Повтор `POST /orders` без ключа создаёт второй заказ. С заголовком `Idempotency-Key` запрос выполняется один раз: в Redis атомарно создаётся запись «в работе» с отпечатком тела, после обработки в ней сохраняется ответ на сутки. Повтор получает сохранённый ответ с `Idempotent-Replayed: true`, пока первый в работе — 409, тот же ключ с другим телом — 422. Если реплика упала между записью заказа и записью ответа в Redis, повтор выполнится заново — второй заказ не даёт создать `UNIQUE (client_id, idempotency_key)` в таблице заказов и `INSERT … ON CONFLICT DO NOTHING`.
+Сервис оплаты без своей базы списывает деньги через внешнего провайдера. Ответ потерялся по дороге — клиент повторяет, и без защиты деньги списываются дважды. Заголовок `Idempotency-Key` обязателен (без него — 400). Ключи хранятся в Redis: это единственное общее для реплик место, раз своей базы нет, а база провайдера чужая. Lua-скрипт атомарно создаёт запись «в работе» с отпечатком тела, после ответа провайдера в ней сохраняется ответ на сутки. Повтор получает сохранённый ответ с `Idempotent-Replayed: true`, пока первый в работе — 409, тот же ключ с другим телом — 422. Если реплика упала между списанием и записью ответа в Redis, повтор дойдёт до провайдера — второго списания нет, потому что ключ передаётся и провайдеру.

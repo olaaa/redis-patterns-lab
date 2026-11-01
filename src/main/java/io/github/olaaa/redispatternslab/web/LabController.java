@@ -4,9 +4,9 @@ import java.util.List;
 
 import io.github.olaaa.redispatternslab.lock.CatalogExportJob;
 import io.github.olaaa.redispatternslab.lock.PartnerInbox;
-import io.github.olaaa.redispatternslab.order.OrderFaults;
-import io.github.olaaa.redispatternslab.order.OrderRepository;
-import io.github.olaaa.redispatternslab.order.OrderService;
+import io.github.olaaa.redispatternslab.payment.Charge;
+import io.github.olaaa.redispatternslab.payment.PaymentFaults;
+import io.github.olaaa.redispatternslab.payment.PaymentProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,57 +31,41 @@ public class LabController {
     private final CatalogExportJob catalogExportJob;
     private final PartnerInbox partnerInbox;
     private final String replica;
-    private final OrderRepository orderRepository;
-    private final OrderService orderService;
-    private final OrderFaults orderFaults;
+    private final PaymentProvider paymentProvider;
+    private final PaymentFaults paymentFaults;
 
     public LabController(ReactiveStringRedisTemplate redis, CatalogExportJob catalogExportJob,
                          PartnerInbox partnerInbox, @Value("${server.port:8080}") String serverPort,
-                         OrderRepository orderRepository, OrderService orderService, OrderFaults orderFaults) {
+                         PaymentProvider paymentProvider, PaymentFaults paymentFaults) {
         this.redis = redis;
         this.catalogExportJob = catalogExportJob;
         this.partnerInbox = partnerInbox;
         this.replica = "replica-" + serverPort;
-        this.orderRepository = orderRepository;
-        this.orderService = orderService;
-        this.orderFaults = orderFaults;
+        this.paymentProvider = paymentProvider;
+        this.paymentFaults = paymentFaults;
     }
 
-    public record OrderStats(long orders, int foundByIdempotencyKey) {
+    public record ProviderState(int calls, List<Charge> charges) {
     }
 
-    /* Сценарий 4: сколько заказов у клиента в базе и сколько раз база вернула уже существующий заказ. */
-    @GetMapping("/orders")
-    public Mono<OrderStats> orders(@RequestParam String client) {
-        return orderRepository.countByClient(client)
-                .map(count -> new OrderStats(count, orderService.foundByIdempotencyKey()));
+    /* Сценарий 4: сколько раз обращались к платёжному провайдеру и какие списания он сделал. */
+    @GetMapping("/payments/provider")
+    public ProviderState paymentProvider() {
+        return new ProviderState(paymentProvider.callCount(), paymentProvider.charges());
     }
 
-    /* Сценарий 4: «уронить» реплику после записи заказа в базу, до записи ответа в Redis. */
-    @PostMapping("/orders/fail-after-save")
-    public void failAfterSave(@RequestParam boolean enabled) {
-        orderFaults.setFailAfterSave(enabled);
+    /* Сценарий 4: «уронить» реплику после списания у провайдера, до записи ответа в Redis. */
+    @PostMapping("/payments/fail-after-charge")
+    public void failAfterCharge(@RequestParam boolean enabled) {
+        paymentFaults.setFailAfterCharge(enabled);
     }
 
-    /* Сценарий 3: выгрузить каталог партнёру, если блокировку взяла эта реплика. */
-    @PostMapping("/catalog-export")
-    public Mono<ExportRun> catalogExport() {
-        return catalogExportJob.runOnce(replica).map(exported -> new ExportRun(replica, exported));
-    }
-
-    /* Сценарий 3: что получил партнёр на этой реплике. */
-    @GetMapping("/partner-inbox")
-    public InboxState partnerInbox() {
-        return new InboxState(partnerInbox.exportedBy(), partnerInbox.maxConcurrentExports());
-    }
-
-    /* Очищает текущую базу Redis целиком, приёмник выгрузок и заказы. */
+    /* Очищает текущую базу Redis целиком, приёмник выгрузок и списания у платёжного провайдера. */
     @PostMapping("/reset")
     public Mono<Void> reset() {
         partnerInbox.reset();
-        orderService.reset();
-        orderFaults.reset();
-        return orderRepository.deleteAll()
-                .then(redis.execute(connection -> connection.serverCommands().flushDb()).then());
+        paymentProvider.reset();
+        paymentFaults.reset();
+        return redis.execute(connection -> connection.serverCommands().flushDb()).then();
     }
 }
