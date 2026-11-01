@@ -24,7 +24,7 @@ import reactor.core.publisher.Mono;
  * - Обработка упала — запись удаляется: повтор с тем же ключом выполнится заново.
  */
 @Component
-public class IdempotentRequests {
+public class IdempotencyGuard {
 
     public static final String KEY_PREFIX = "idem:";
 
@@ -59,7 +59,7 @@ public class IdempotentRequests {
     private final ReactiveStringRedisTemplate redis;
     private final IdempotencyProperties properties;
 
-    public IdempotentRequests(ReactiveStringRedisTemplate redis, IdempotencyProperties properties) {
+    public IdempotencyGuard(ReactiveStringRedisTemplate redis, IdempotencyProperties properties) {
         this.redis = redis;
         this.properties = properties;
     }

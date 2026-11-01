@@ -11,7 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import io.github.olaaa.redispatternslab.idempotency.IdempotentOutcome;
-import io.github.olaaa.redispatternslab.idempotency.IdempotentRequests;
+import io.github.olaaa.redispatternslab.idempotency.IdempotencyGuard;
 import io.github.olaaa.redispatternslab.payment.PaymentRequest;
 import io.github.olaaa.redispatternslab.payment.PaymentService;
 import io.github.olaaa.redispatternslab.web.PaymentController;
@@ -29,7 +29,7 @@ class Scenario4IdempotencyTest extends ScenarioTestSupport {
 
     private static final String CLIENT = "mobile-app";
     private static final String KEY = "6f1c2a9e-pay-1";
-    private static final String RECORD_KEY = IdempotentRequests.KEY_PREFIX + CLIENT + ":" + KEY;
+    private static final String RECORD_KEY = IdempotencyGuard.KEY_PREFIX + CLIENT + ":" + KEY;
     private static final PaymentRequest PAYMENT = new PaymentRequest("order-42", new BigDecimal("4980.00"));
 
     @Autowired
@@ -39,7 +39,7 @@ class Scenario4IdempotencyTest extends ScenarioTestSupport {
     PaymentService paymentService;
 
     @Autowired
-    IdempotentRequests idempotentRequests;
+    IdempotencyGuard idempotencyGuard;
 
     @Autowired
     JsonMapper jsonMapper;
@@ -210,7 +210,7 @@ class Scenario4IdempotencyTest extends ScenarioTestSupport {
 
     /* Тот же путь, что у контроллера, но с выбранным сервисом оплаты. */
     private Mono<IdempotentOutcome> payViaIdempotency(PaymentService service) {
-        return idempotentRequests.execute(CLIENT, KEY, PaymentController.fingerprint(PAYMENT),
+        return idempotencyGuard.execute(CLIENT, KEY, PaymentController.fingerprint(PAYMENT),
                 () -> PaymentController.pay(service, CLIENT, KEY, PAYMENT, jsonMapper));
     }
 

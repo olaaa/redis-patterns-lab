@@ -5,7 +5,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
-import io.github.olaaa.redispatternslab.idempotency.IdempotentRequests;
+import io.github.olaaa.redispatternslab.idempotency.IdempotencyGuard;
 import io.github.olaaa.redispatternslab.idempotency.StoredResponse;
 import io.github.olaaa.redispatternslab.payment.PaymentDeclinedException;
 import io.github.olaaa.redispatternslab.payment.PaymentRequest;
@@ -32,13 +32,13 @@ public class PaymentController {
     public static final String REPLAYED_HEADER = "Idempotent-Replayed";
 
     private final PaymentService paymentService;
-    private final IdempotentRequests idempotentRequests;
+    private final IdempotencyGuard idempotencyGuard;
     private final JsonMapper jsonMapper;
 
-    public PaymentController(PaymentService paymentService, IdempotentRequests idempotentRequests,
+    public PaymentController(PaymentService paymentService, IdempotencyGuard idempotencyGuard,
                              JsonMapper jsonMapper) {
         this.paymentService = paymentService;
-        this.idempotentRequests = idempotentRequests;
+        this.idempotencyGuard = idempotencyGuard;
         this.jsonMapper = jsonMapper;
     }
 
@@ -50,7 +50,7 @@ public class PaymentController {
             return Mono.just(ResponseEntity.badRequest().contentType(MediaType.TEXT_PLAIN)
                     .body("нужен заголовок " + IDEMPOTENCY_KEY_HEADER));
         }
-        return idempotentRequests.execute(clientId, idempotencyKey, fingerprint(request),
+        return idempotencyGuard.execute(clientId, idempotencyKey, fingerprint(request),
                         () -> pay(paymentService, clientId, idempotencyKey, request, jsonMapper))
                 .map(outcome -> toEntity(outcome.response(), outcome.replayed()));
     }

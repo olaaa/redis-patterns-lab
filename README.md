@@ -58,6 +58,6 @@ Spring Boot сам поднимет PostgreSQL и Redis из `compose.yaml`. З�
 
 ### 4. Идемпотентность запросов
 
-Тест: `Scenario4IdempotencyTest`. Компоненты: `IdempotentRequests`, `PaymentController`, `PaymentService`, `PaymentProvider`. Подробно: [docs/scenarios/04-idempotency.md](docs/scenarios/04-idempotency.md), вручную: `http/04-idempotency.http`.
+Тест: `Scenario4IdempotencyTest`. Компоненты: `IdempotencyGuard`, `PaymentController`, `PaymentService`, `PaymentProvider`. Подробно: [docs/scenarios/04-idempotency.md](docs/scenarios/04-idempotency.md), вручную: `http/04-idempotency.http`.
 
 Сервис оплаты без своей базы списывает деньги через внешнего провайдера. Ответ потерялся по дороге — клиент повторяет, и без защиты деньги списываются дважды. Заголовок `Idempotency-Key` обязателен (без него — 400). Ключи хранятся в Redis: это единственное общее для реплик место, раз своей базы нет, а база провайдера чужая. Lua-скрипт атомарно создаёт запись «в работе» с отпечатком тела, после ответа провайдера в ней сохраняется ответ на сутки. Повтор получает сохранённый ответ с `Idempotent-Replayed: true`, пока первый в работе — 409, тот же ключ с другим телом — 422. Если реплика упала между списанием и записью ответа в Redis, повтор дойдёт до провайдера — второго списания нет, потому что ключ передаётся и провайдеру.

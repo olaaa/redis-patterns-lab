@@ -1,7 +1,7 @@
 # Сценарий 4. Идемпотентность запросов: оплата через внешнего провайдера
 
 Тест: `src/test/java/io/github/olaaa/redispatternslab/scenario/Scenario4IdempotencyTest.java`.
-Ключи идемпотентности: `IdempotentRequests` (записи `idem:<клиент>:<ключ>` в Redis). Оплата: `PaymentController` (`POST /payments`), `PaymentService`. Платёжный провайдер: `PaymentProvider` — имитация внешней системы. Сбой для опыта: `PaymentFaults`. Настройки: `idempotency.in-progress-ttl` = 30 секунд, `completed-ttl` = 24 часа, `payments.provider-delay` = 2 секунды (в тестах — 300 мс), `payments.pass-key-to-provider` = true.
+Ключи идемпотентности: `IdempotencyGuard` (записи `idem:<клиент>:<ключ>` в Redis). Оплата: `PaymentController` (`POST /payments`), `PaymentService`. Платёжный провайдер: `PaymentProvider` — имитация внешней системы. Сбой для опыта: `PaymentFaults`. Настройки: `idempotency.in-progress-ttl` = 30 секунд, `completed-ttl` = 24 часа, `payments.provider-delay` = 2 секунды (в тестах — 300 мс), `payments.pass-key-to-provider` = true.
 Ручная проверка: `http/04-idempotency.http` и команды `curl` ниже.
 
 Коротко:
@@ -37,9 +37,9 @@ flowchart LR
 В коде запрос проходит так:
 
 1. `PaymentController` берёт заголовок `Idempotency-Key`, тело и `X-Client-Id`. Нет ключа — 400.
-2. `IdempotentRequests.execute(клиент, ключ, отпечаток тела, «оплатить»)` по записи в Redis решает: выполнять или ответить без выполнения.
+2. `IdempotencyGuard.execute(клиент, ключ, отпечаток тела, «оплатить»)` по записи в Redis решает: выполнять или ответить без выполнения.
 3. Если выполнять — `PaymentService.pay` вызывает провайдера.
-4. `IdempotentRequests` сохраняет ответ в Redis и отдаёт его клиенту.
+4. `IdempotencyGuard` сохраняет ответ в Redis и отдаёт его клиенту.
 
 ## Где помнить ключи
 
