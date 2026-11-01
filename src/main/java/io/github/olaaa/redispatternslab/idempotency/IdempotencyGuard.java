@@ -72,8 +72,10 @@ public class IdempotencyGuard {
             return redis.execute(BEGIN, List.of(key),
                             List.of(token, fingerprint, String.valueOf(properties.inProgressTtl().toMillis())))
                     .next()
+//  begun == 1 Lua-запрос создал запись «в работе»
                     .flatMap(begun -> begun == 1
                             ? runAndRemember(key, token, action)
+// answerFromRecord() читает запись и не выполняет оплату
                             : answerFromRecord(key, fingerprint, () -> execute(clientId, idempotencyKey, fingerprint, action)));
         });
     }
