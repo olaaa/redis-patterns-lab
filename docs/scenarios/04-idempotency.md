@@ -123,6 +123,43 @@ flowchart LR
 
 **Когда заголовка нет.** Только если клиент его не прислал. Для оплаты это опасно, поэтому заголовок обязателен: без него — 400. Черновик IETF так и советует: если ключ обязателен, а его нет, сервер «должен ответить кодом 400».
 
+## Как ещё называют заголовок с ключом
+
+Чаще всего — `Idempotency-Key`: это имя закрепляет черновик IETF, его используют Stripe и Adyen (в документации Adyen — `idempotency-key` строчными; это тот же заголовок, имена заголовков HTTP не различают регистр). У многих провайдеров имя своё, а кто-то передаёт ключ не в заголовке, а в самом запросе.
+
+| Где | Имя | Где передаётся |
+|---|---|---|
+| черновик IETF, Stripe, Adyen | `Idempotency-Key` | заголовок |
+| PayPal | `PayPal-Request-Id` | заголовок |
+| Checkout.com | `Cko-Idempotency-Key` | заголовок |
+| Amazon Pay | `x-amz-pay-idempotency-key` | заголовок |
+| Worldline | `X-GCS-Idempotence-Key` | заголовок |
+| ЮKassa | `Idempotence-Key` | заголовок; по русскоязычной странице документации — английская версия не открылась |
+| спецификация OASIS Repeatable Requests, например Azure Communication Services | `Repeatability-Request-ID` и `Repeatability-First-Sent` | два заголовка |
+| Square | `idempotency_key` | поле тела запроса, обязательное |
+| AWS, например EC2 | `ClientToken`; в AWS CLI — `--client-token` | параметр запроса |
+| Google, рекомендации AIP-155 | `request_id` | поле сообщения запроса |
+
+Встречаются оба написания: Idempotency и Idempotence.
+
+**Пара заголовков OASIS.** `Repeatability-Request-ID` — уникальный GUID запроса, `Repeatability-First-Sent` — когда исходный запрос отправили впервые, в UTC. В Azure Communication Services запросы отслеживаются 5 минут; если время первой отправки старше, повторять запрос небезопасно, и сервис отвечает 412.
+
+### `*-Request-ID`: ключ идемпотентности или трассировка
+
+Под именем `*-Request-ID` встречаются два разных заголовка, и по имени их не различить.
+
+- **`PayPal-Request-Id`, `Repeatability-Request-ID` — ключи идемпотентности.** Клиент создаёт значение один раз на операцию и шлёт его со всеми повторами; сервер запоминает его и второй раз операцию не выполняет. По документации PayPal, заголовок содержит уникальный идентификатор, созданный клиентом, и сервер хранит его какое-то время.
+- **`X-Request-ID` — обычно трассировка.** Он связывает записи логов разных систем об одном запросе. Маршрутизатор Heroku создаёт уникальный `X-Request-ID` для каждого входящего запроса и передаёт его приложению, чтобы строку его лога найти в логах приложения. В nginx есть переменная `$request_id` — уникальный идентификатор запроса из 16 случайных байт; её часто ставят в такой заголовок. Отсюда вывод: каждая попытка получает новый идентификатор, повтор по нему не узнать, и от второго списания он не защищает.
+
+| | Ключ идемпотентности | Идентификатор для трассировки |
+|---|---|---|
+| Кто создаёт | клиент, один раз на операцию | клиент или прокси, часто на каждую попытку |
+| У повтора | то же значение | обычно новое |
+| Что с ним делает сервер | хранит и по нему отсекает повтор | пишет в логи |
+| Примеры | `Idempotency-Key`, `PayPal-Request-Id`, `Repeatability-Request-ID` | `X-Request-ID`, `X-Correlation-ID` |
+
+Встретив `*-Request-ID` в проекте, по имени не понять, что это: надо смотреть, что с ним делает сервер — сохраняет и отсекает по нему повторы или только пишет в логи.
+
 ## Как проходят запрос и повтор
 
 Главный случай — ответ потерялся:
@@ -373,3 +410,15 @@ curl -s $H/lab/payments/provider
 - Stripe — [Idempotent requests](https://docs.stripe.com/api/idempotent_requests).
 - Stripe — [Error codes](https://docs.stripe.com/error-codes), `idempotency_key_in_use` и `rate_limit`.
 - Brandur Leach — [Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys), 2017.
+- Adyen — [API idempotency](https://docs.adyen.com/development-resources/api-idempotency).
+- PayPal — [Idempotency](https://developer.paypal.com/api/rest/reference/idempotency/).
+- Checkout.com — [Idempotency](https://www.checkout.com/docs/developer-resources/api/idempotency).
+- Amazon Pay — [Idempotency](https://developer.amazon.com/docs/amazon-pay-api-v2/idempotency.html).
+- Worldline Direct — [Idempotent requests](https://docs.direct.worldline-solutions.com/integration/api-developer-guide/idempotent-requests).
+- ЮKassa — [Формат взаимодействия](https://yookassa.ru/developers/using-api/interaction-format), русскоязычная страница: английская версия не открылась.
+- Microsoft — [Repeatable requests](https://learn.microsoft.com/en-us/rest/api/communication/repeatable-requests), Azure Communication Services; OASIS — [Repeatable Requests Version 1.0](https://docs.oasis-open.org/odata/repeatable-requests/v1.0/repeatable-requests-v1.0.html).
+- Square — [CreatePayment](https://developer.squareup.com/reference/square/payments-api/create-payment).
+- AWS — [Ensuring idempotency in Amazon EC2 API requests](https://docs.aws.amazon.com/ec2/latest/devguide/ec2-api-idempotency.html).
+- Google — [AIP-155 Request identification](https://google.aip.dev/155).
+- Heroku — [HTTP Request IDs](https://devcenter.heroku.com/articles/http-request-id).
+- nginx — [ngx_http_core_module, `$request_id`](https://nginx.org/en/docs/http/ngx_http_core_module.html#var_request_id).
